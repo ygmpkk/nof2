@@ -7,11 +7,13 @@ __version__ = "1.0.0"
 __author__ = "nof2 AI"
 
 from .agent import TradingAgent
+from .pydantic_auto_agent import PydanticAutoTradingAgent
 from .strategies import TrendFollowingStrategy, MeanReversionStrategy
 from .portfolio import Portfolio
 
 __all__ = [
     "TradingAgent",
+    "PydanticAutoTradingAgent",
     "TrendFollowingStrategy",
     "MeanReversionStrategy",
     "Portfolio",
