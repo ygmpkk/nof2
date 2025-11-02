@@ -1,11 +1,20 @@
-"""
-Market data handling and simulation
-"""
+"""Market data handling, including integrations with external providers."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
 import numpy as np
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
-from dataclasses import dataclass
+
+try:  # pragma: no cover - optional dependency for Binance integration
+    from binance.client import Client as BinanceClient
+    from binance.exceptions import BinanceAPIException
+except Exception:  # pragma: no cover - fallback when library missing
+    BinanceClient = None
+    BinanceAPIException = Exception
 
 
 @dataclass
@@ -33,7 +42,7 @@ class MarketData:
 
 
 class MarketDataProvider:
-    """Base class for market data providers"""
+    """Base class for market data providers."""
     
     def get_latest_price(self, symbol: str) -> float:
         """Get latest price for a symbol"""
@@ -49,7 +58,7 @@ class MarketDataProvider:
 
 
 class SimulatedMarketDataProvider(MarketDataProvider):
-    """Simulated market data for testing"""
+    """Simulated market data for testing."""
     
     def __init__(self, initial_price: float = 100.0, volatility: float = 0.02):
         self.initial_price = initial_price
@@ -60,7 +69,7 @@ class SimulatedMarketDataProvider(MarketDataProvider):
         np.random.seed(42)  # For reproducibility
     
     def get_latest_price(self, symbol: str) -> float:
-        """Get simulated latest price"""
+        """Get simulated latest price."""
         if symbol not in self.current_prices:
             self.current_prices[symbol] = self.initial_price
         
@@ -77,7 +86,7 @@ class SimulatedMarketDataProvider(MarketDataProvider):
         return new_price
     
     def get_historical_data(self, symbol: str, periods: int) -> List[MarketData]:
-        """Generate simulated historical data"""
+        """Generate simulated historical data."""
         if symbol not in self.historical_data:
             self.historical_data[symbol] = []
         
@@ -116,11 +125,111 @@ class SimulatedMarketDataProvider(MarketDataProvider):
         return self.historical_data[symbol][-periods:]
     
     def advance_time(self):
-        """Advance simulation time"""
+        """Advance simulation time."""
         self.time_step += 1
         # Update all current prices
         for symbol in list(self.current_prices.keys()):
             self.get_latest_price(symbol)
+
+
+class BinanceMarketDataProvider(MarketDataProvider):
+    """Market data provider backed by the Binance Spot REST API."""
+
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        *,
+        interval: str = "1h",
+        testnet: bool = False,
+        client: Optional[BinanceClient] = None,
+        requests_params: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if client is not None:
+            self.client = client
+        else:
+            if BinanceClient is None:
+                raise ImportError(
+                    "python-binance must be installed to use BinanceMarketDataProvider"
+                )
+            self.client = BinanceClient(
+                api_key,
+                api_secret,
+                testnet=testnet,
+                requests_params=requests_params or {},
+            )
+
+        self.interval = interval
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _to_market_data(self, symbol: str, kline: List[Any]) -> MarketData:
+        """Convert a raw kline response into :class:`MarketData`."""
+
+        open_time = datetime.fromtimestamp(kline[0] / 1000)
+        return MarketData(
+            symbol=symbol,
+            timestamp=open_time,
+            open=float(kline[1]),
+            high=float(kline[2]),
+            low=float(kline[3]),
+            close=float(kline[4]),
+            volume=float(kline[5]),
+        )
+
+    def _fetch_klines(self, symbol: str, limit: int) -> List[List[Any]]:
+        """Retrieve kline data from Binance with basic error handling."""
+
+        try:
+            klines = self.client.get_klines(
+                symbol=symbol,
+                interval=self.interval,
+                limit=min(limit, 1000),
+            )
+        except BinanceAPIException as exc:  # pragma: no cover - depends on API
+            self.logger.error("Binance kline request failed: %s", exc)
+            raise
+        return klines
+
+    # ------------------------------------------------------------------
+    # MarketDataProvider implementation
+    # ------------------------------------------------------------------
+    def get_latest_price(self, symbol: str) -> float:
+        """Get the latest traded price for a symbol."""
+
+        try:
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+        except BinanceAPIException as exc:  # pragma: no cover - depends on API
+            self.logger.error("Failed to fetch latest price for %s: %s", symbol, exc)
+            raise
+
+        price = float(ticker.get("price", 0.0))
+        if price <= 0:
+            raise ValueError(f"Received non-positive price for {symbol}: {ticker}")
+        return price
+
+    def get_historical_data(self, symbol: str, periods: int) -> List[MarketData]:
+        """Return historical candle data for a symbol."""
+
+        if periods <= 0:
+            return []
+
+        if periods > 1000:
+            self.logger.warning(
+                "Binance API limits historical data to 1000 candles; truncating request for %s",
+                symbol,
+            )
+
+        klines = self._fetch_klines(symbol, periods)
+        market_data = [self._to_market_data(symbol, kline) for kline in klines]
+        market_data.sort(key=lambda data: data.timestamp)
+
+        if len(market_data) > periods:
+            market_data = market_data[-periods:]
+
+        return market_data
 
 
 class TechnicalIndicators:

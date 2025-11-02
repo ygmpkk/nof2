@@ -28,7 +28,12 @@ class Position:
     def cost_basis(self) -> float:
         """Cost basis of the position"""
         return self.quantity * self.entry_price
-    
+
+    @property
+    def average_price(self) -> float:
+        """Average entry price of the position."""
+        return self.entry_price
+
     @property
     def pnl(self) -> float:
         """Profit and loss"""
@@ -85,15 +90,25 @@ class Portfolio:
         cost = quantity * price
         return cost <= self.cash and symbol not in self.positions
     
-    def open_position(self, symbol: str, quantity: float, price: float, 
-                     stop_loss: Optional[float] = None, 
-                     take_profit: Optional[float] = None) -> bool:
+    def open_position(
+        self,
+        symbol: str,
+        quantity: float,
+        price: float,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        *,
+        enforce_risk_checks: bool = True,
+    ) -> bool:
         """Open a new position"""
         cost = quantity * price
-        
-        if not self.can_open_position(symbol, quantity, price):
+
+        if symbol in self.positions:
             return False
-        
+
+        if enforce_risk_checks and cost > self.cash:
+            return False
+
         self.cash -= cost
         self.positions[symbol] = Position(
             symbol=symbol,

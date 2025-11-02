@@ -3,7 +3,7 @@ Configuration management for the trading agent
 """
 
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 @dataclass
@@ -27,8 +27,17 @@ class TradingConfig:
     max_drawdown_pct: float = 0.20  # 20% max drawdown
     
     # Data settings
-    data_source: str = "simulation"  # or "live", "historical"
+    data_source: str = "simulation"  # or "binance", "historical"
     symbols: list = None
+
+    # Binance integration settings
+    binance_api_key: Optional[str] = None
+    binance_api_secret: Optional[str] = None
+    binance_testnet: bool = True
+    binance_interval: str = "1h"
+
+    # Execution settings
+    enable_live_trading: bool = False
     
     # AI settings
     use_ai_predictions: bool = True
@@ -53,6 +62,11 @@ class TradingConfig:
             "max_drawdown_pct": self.max_drawdown_pct,
             "data_source": self.data_source,
             "symbols": self.symbols,
+            "binance_api_key": self.binance_api_key,
+            "binance_api_secret": self.binance_api_secret,
+            "binance_testnet": self.binance_testnet,
+            "binance_interval": self.binance_interval,
+            "enable_live_trading": self.enable_live_trading,
             "use_ai_predictions": self.use_ai_predictions,
             "confidence_threshold": self.confidence_threshold,
         }
