@@ -1,6 +1,7 @@
 """Data module initialization"""
 
 from .market_data import (
+    BinanceMarketDataProvider,
     MarketData,
     MarketDataProvider,
     SimulatedMarketDataProvider,
@@ -8,6 +9,7 @@ from .market_data import (
 )
 
 __all__ = [
+    "BinanceMarketDataProvider",
     "MarketData",
     "MarketDataProvider",
     "SimulatedMarketDataProvider",

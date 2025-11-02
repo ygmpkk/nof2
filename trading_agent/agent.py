@@ -3,14 +3,20 @@ AI-powered Trading Agent
 """
 
 import logging
-from typing import Dict, List, Optional
 from datetime import datetime
+from typing import Dict, List, Optional
+
 import numpy as np
 
 from .config import TradingConfig
+from .data.market_data import (
+    BinanceMarketDataProvider,
+    MarketDataProvider,
+    SimulatedMarketDataProvider,
+)
 from .portfolio import Portfolio
-from .data.market_data import MarketDataProvider, SimulatedMarketDataProvider
-from .strategies import create_strategy, Signal, TradingStrategy
+from .strategies import Signal, TradingStrategy, create_strategy
+from .utils import BinanceTradeExecutor, TradeExecutor
 
 
 logging.basicConfig(
@@ -61,13 +67,44 @@ class AIPredictor:
 
 class TradingAgent:
     """Main AI Trading Agent"""
-    
-    def __init__(self, config: Optional[TradingConfig] = None, 
-                 data_provider: Optional[MarketDataProvider] = None):
+
+    def __init__(
+        self,
+        config: Optional[TradingConfig] = None,
+        data_provider: Optional[MarketDataProvider] = None,
+        trade_executor: Optional[TradeExecutor] = None,
+    ):
         """Initialize the trading agent"""
+
         self.config = config or TradingConfig()
         self.portfolio = Portfolio(initial_capital=self.config.initial_capital)
-        self.data_provider = data_provider or SimulatedMarketDataProvider()
+
+        if data_provider is not None:
+            self.data_provider = data_provider
+        else:
+            if self.config.data_source == "binance":
+                if not self.config.binance_api_key or not self.config.binance_api_secret:
+                    raise ValueError("Binance API credentials are required for live data")
+                self.data_provider = BinanceMarketDataProvider(
+                    api_key=self.config.binance_api_key,
+                    api_secret=self.config.binance_api_secret,
+                    interval=self.config.binance_interval,
+                    testnet=self.config.binance_testnet,
+                )
+            else:
+                self.data_provider = SimulatedMarketDataProvider()
+
+        self.trade_executor = trade_executor
+        if self.config.enable_live_trading:
+            if self.trade_executor is None:
+                if not self.config.binance_api_key or not self.config.binance_api_secret:
+                    raise ValueError("Binance API credentials are required for live trading")
+                self.trade_executor = BinanceTradeExecutor(
+                    api_key=self.config.binance_api_key,
+                    api_secret=self.config.binance_api_secret,
+                    testnet=self.config.binance_testnet,
+                )
+
         self.strategy = create_strategy(self.config.strategy_type, self.config.to_dict())
         self.ai_predictor = AIPredictor(confidence_threshold=self.config.confidence_threshold)
         self.logger = logging.getLogger(__name__)
@@ -175,9 +212,32 @@ class TradingAgent:
             
             # Check if we should close existing position
             if self._should_close_position(symbol, signal, current_price):
-                if self.portfolio.close_position(symbol, current_price):
+                position = self.portfolio.get_position(symbol)
+                if position is None:
+                    return
+
+                exit_price = current_price
+                executed_quantity = position.quantity
+                if self.trade_executor and self.config.enable_live_trading:
+                    try:
+                        execution = self.trade_executor.sell(symbol, position.quantity)
+                        exit_price = execution.price or exit_price
+                        if execution.quantity:
+                            executed_quantity = execution.quantity
+                            position.quantity = execution.quantity
+                        self.logger.info(
+                            "Executed live SELL %s qty=%.8f price=%.2f",
+                            symbol,
+                            executed_quantity,
+                            exit_price,
+                        )
+                    except Exception as exc:
+                        self.logger.error("Live sell order failed for %s: %s", symbol, exc)
+                        return
+
+                if self.portfolio.close_position(symbol, exit_price):
                     self.trade_count += 1
-                    self.logger.info(f"Closed position: {symbol} at {current_price:.2f}")
+                    self.logger.info(f"Closed position: {symbol} at {exit_price:.2f}")
             
             # Check if we should open new position
             elif self._should_open_position(symbol, signal, prices):
@@ -186,15 +246,60 @@ class TradingAgent:
                 )
                 
                 if quantity > 0:
-                    stop_loss = self._calculate_stop_loss(current_price, is_long=True)
-                    take_profit = self._calculate_take_profit(current_price, is_long=True)
-                    
-                    if self.portfolio.open_position(symbol, quantity, current_price, 
-                                                   stop_loss, take_profit):
+                    entry_price = current_price
+                    executed_quantity = quantity
+
+                    if self.trade_executor and self.config.enable_live_trading:
+                        if not self.portfolio.can_open_position(symbol, quantity, current_price):
+                            self.logger.warning(
+                                "Insufficient cash to open live position for %s", symbol
+                            )
+                            return
+
+                        try:
+                            execution = self.trade_executor.buy(symbol, quantity)
+                            executed_quantity = execution.quantity or executed_quantity
+                            entry_price = execution.price or entry_price
+                            self.logger.info(
+                                "Executed live BUY %s qty=%.8f price=%.2f",
+                                symbol,
+                                executed_quantity,
+                                entry_price,
+                            )
+                        except Exception as exc:
+                            self.logger.error("Live buy order failed for %s: %s", symbol, exc)
+                            return
+
+                        stop_loss = self._calculate_stop_loss(entry_price, is_long=True)
+                        take_profit = self._calculate_take_profit(entry_price, is_long=True)
+                        opened = self.portfolio.open_position(
+                            symbol,
+                            executed_quantity,
+                            entry_price,
+                            stop_loss,
+                            take_profit,
+                            enforce_risk_checks=False,
+                        )
+                    else:
+                        stop_loss = self._calculate_stop_loss(entry_price, is_long=True)
+                        take_profit = self._calculate_take_profit(entry_price, is_long=True)
+                        opened = self.portfolio.open_position(
+                            symbol,
+                            executed_quantity,
+                            entry_price,
+                            stop_loss,
+                            take_profit,
+                        )
+
+                    if opened:
                         self.trade_count += 1
                         self.logger.info(
-                            f"Opened position: {symbol} at {current_price:.2f}, "
-                            f"quantity={quantity:.2f}, SL={stop_loss:.2f}, TP={take_profit:.2f}"
+                            f"Opened position: {symbol} at {entry_price:.2f}, "
+                            f"quantity={executed_quantity:.2f}, SL={stop_loss:.2f}, TP={take_profit:.2f}"
+                        )
+                    else:
+                        self.logger.warning(
+                            "Failed to record position for %s after signal", symbol
                         )
         
         except Exception as e:

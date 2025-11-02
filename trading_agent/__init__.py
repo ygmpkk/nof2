@@ -7,9 +7,11 @@ __version__ = "1.0.0"
 __author__ = "nof2 AI"
 
 from .agent import TradingAgent
-from .pydantic_auto_agent import PydanticAutoTradingAgent
-from .strategies import TrendFollowingStrategy, MeanReversionStrategy
+from .data import BinanceMarketDataProvider
 from .portfolio import Portfolio
+from .pydantic_auto_agent import PydanticAutoTradingAgent
+from .strategies import MeanReversionStrategy, TrendFollowingStrategy
+from .utils import BinanceTradeExecutor
 
 __all__ = [
     "TradingAgent",
@@ -17,4 +19,6 @@ __all__ = [
     "TrendFollowingStrategy",
     "MeanReversionStrategy",
     "Portfolio",
+    "BinanceMarketDataProvider",
+    "BinanceTradeExecutor",
 ]
